@@ -27,8 +27,8 @@
     "note": "Verbatim from the Zapier zaps (field pills resolved: sheet COL B = fan editor, COL C = fan edit title, COL D = original title; reddit 1. Title / 1. Link).",
     "reddit": {
       "discord": "New Post in The Fan Edit Fan Club Reddit Feed - ***[{title}]({url})***\n\n{url}",
-      "facebook": "New Post in The Fan Edit Fan Club Reddit Feed - \n\n{title}\n\n\n{url}",
-      "x": "New Post in The Fan Edit Fan Club Reddit Feed - \n\n{title}.\n\n{url}"
+      "facebook": "New Post in The Fan Edit Fan Club Reddit Feed - {title}",
+      "x": "New Post in The Fan Edit Fan Club Reddit Feed - {title}.\n\n{url}"
     },
     "sheet": {
       "discord": "A New Row has been added to [The Fan Edit Central Database](https://faneditcentral.wixsite.com/home) - A Fan Edit of \n\n{original} called **{title} by {editor}**.",
