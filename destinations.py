@@ -44,7 +44,11 @@ def _request(req: urllib.request.Request, label: str) -> dict | list:
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt == 1:
                 retry = e.headers.get("Retry-After")
-                wait = float(retry) + 1 if retry else 5
+                try:
+                    wait = float(retry) + 1 if retry else 5
+                except (TypeError, ValueError):
+                    wait = 5
+                wait = min(wait, 90)  # never stall a run on a huge retry-after
                 log(f"{label} rate-limited; waiting {wait:.0f}s")
                 time.sleep(wait)
                 continue
