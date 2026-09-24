@@ -2,11 +2,13 @@
 
 Secrets (set as env vars on Render):
   DISCORD_BOT_TOKEN  -> Discord bot token (Authorization: Bot <token>)
-  BUFFER_TOKEN       -> Buffer API access token (Authorization: Bearer <token>)
+  BUFFER_TOKEN       -> Buffer API key from publish.buffer.com/settings/api
+                        (new public GraphQL API, Authorization: Bearer <token>)
   FACEBOOK_PAGE_TOKEN -> Facebook Page access token
 
 Discord channel ids are resolved at runtime from channel names and cached in
-state/discord_channels.json.
+state/discord_channels.json. Buffer channel ids are cached in
+state/buffer_profile.json.
 """
 from __future__ import annotations
 
@@ -126,51 +128,113 @@ def post_discord(token: str, channel_id: str, text: str) -> bool:
     return True
 
 
+BUFFER_GQL = "https://api.buffer.com"
+BUFFER_UA = "poster-pipeline/1.0"
+
+
+def _buffer_gql(token: str, query: str, variables: dict | None,
+                label: str) -> dict:
+    """POST a GraphQL operation to Buffer's public API.
+
+    The API answers HTTP 200 for nearly everything, including failures, so
+    the GraphQL `errors` array is checked explicitly. Retries once on 429
+    honoring Retry-After.
+    """
+    body = json.dumps({"query": query, "variables": variables or {}}).encode()
+    for attempt in (1, 2):
+        req = urllib.request.Request(
+            BUFFER_GQL, data=body, method="POST",
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json",
+                     "User-Agent": BUFFER_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read().decode("utf-8", errors="replace"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt == 1:
+                retry = e.headers.get("Retry-After")
+                try:
+                    wait = float(retry) + 1 if retry else 5
+                except (TypeError, ValueError):
+                    wait = 5
+                wait = min(wait, 90)
+                log(f"{label} rate-limited; waiting {wait:.0f}s")
+                time.sleep(wait)
+                continue
+            raise DestinationError(
+                f"{label} HTTP {e.code}: "
+                f"{e.read()[:200].decode(errors='replace')}")
+        if not isinstance(data, dict):
+            raise DestinationError(f"{label}: unexpected response")
+        errs = data.get("errors")
+        if errs:
+            first = errs[0]
+            msg = (first.get("message", str(first))
+                   if isinstance(first, dict) else str(first))
+            raise DestinationError(f"{label} GraphQL error: {msg[:200]}")
+        inner = data.get("data")
+        if not isinstance(inner, dict):
+            raise DestinationError(f"{label}: empty data in response")
+        return inner
+    raise DestinationError(f"{label}: retry exhausted")  # unreachable
+
+
 def resolve_buffer_profile_id(token: str, channel_name: str) -> str:
-    """Resolve the Buffer profile id for the X channel, caching it in state."""
+    """Resolve the Buffer channel id for the X channel via the GraphQL API,
+    caching it in state."""
     cache = os.path.join(STATE_DIR, "buffer_profile.json")
     if os.path.exists(cache):
         with open(cache) as f:
             pid = json.load(f).get("profile_id", "")
         if pid:
             return pid
-    data = _get("https://api.bufferapp.com/1/profiles.json",
-                {"Authorization": f"Bearer {token}"}, "buffer profiles")
-    profiles = data.get("profiles", []) if isinstance(data, dict) else []
-    twitter = [p for p in profiles
-               if (p.get("service") or "").lower() == "twitter"]
-    if not twitter:
-        raise DestinationError("buffer: no Twitter/X profile found on the token")
+    data = _buffer_gql(
+        token, "query { account { organizations { id name } } }",
+        None, "buffer account")
+    orgs = (data.get("account") or {}).get("organizations") or []
+    if not orgs:
+        raise DestinationError("buffer: no organizations on this token")
     want = channel_name.lower().replace(" ", "")
+    twitter = []
+    for org in orgs:
+        ch = _buffer_gql(
+            token,
+            "query($orgId: OrganizationId!) { channels(input: "
+            "{organizationId: $orgId}) { id name service } }",
+            {"orgId": org["id"]}, "buffer channels")
+        for c in ch.get("channels") or []:
+            if str(c.get("service", "")).lower() == "twitter":
+                twitter.append(c)
+    if not twitter:
+        raise DestinationError(
+            "buffer: no Twitter/X channel found on the token")
     pid = ""
-    for p in twitter:
-        name = ((p.get("formatted_username") or "") + " " +
-                (p.get("service_username") or "")).lower().replace(" ", "")
-        if want and want in name:
-            pid = p["id"]
+    for c in twitter:
+        name = str(c.get("name", "")).lower().replace(" ", "")
+        if want and (want in name or name in want):
+            pid = c["id"]
             break
     if not pid:
         pid = twitter[0]["id"]
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(cache, "w") as f:
         json.dump({"profile_id": pid, "channel_name": channel_name}, f)
-    log(f"buffer: resolved profile {pid}")
+    log(f"buffer: resolved channel {pid}")
     return pid
 
 
 def post_buffer_x(token: str, profile_id: str, text: str) -> bool:
-    body = urllib.parse.urlencode({
-        "text": text,
-        "profile_ids[]": profile_id,
-        "shorten": "false",
-        "now": "true",
-    }).encode()
-    resp = _post("https://api.bufferapp.com/1/updates/create.json", body, {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/x-www-form-urlencoded",
-    }, "buffer")
-    if not resp.get("success", True):
-        raise DestinationError(f"buffer rejected update: {str(resp)[:200]}")
+    data = _buffer_gql(
+        token,
+        "mutation($input: CreatePostInput!) { createPost(input: $input) "
+        "{ __typename ... on PostActionSuccess { post { id status } } } }",
+        {"input": {"channelId": profile_id, "text": text,
+                   "mode": "shareNow", "schedulingType": "automatic",
+                   "needsApproval": False, "assets": []}},
+        "buffer createPost")
+    payload = data.get("createPost") or {}
+    post = payload.get("post") or {}
+    log(f"buffer: posted {post.get('id')} status={post.get('status')}")
     return True
 
 
