@@ -1,0 +1,39 @@
+{
+  "sheet": {
+    "id": "18X0QzR904z94NZd7RXOaCuIa117fF0jnEmd7smmj7D0",
+    "tab": "Newest Additions"
+  },
+  "reddit": {
+    "rss_url": "https://www.reddit.com/user/faneditfanclub/m/fan_edit_fan_club_reddit_feed/new/.rss",
+    "crosspost_patterns": [
+      "crosspost",
+      "repost",
+      "x-post",
+      "crossposted from"
+    ]
+  },
+  "discord": {
+    "sheet_channel": "fan-edit-central-database",
+    "reddit_channel": "reddit-fan-edits-feed"
+  },
+  "buffer": {
+    "channel_name": "FanEditFanClub X Free Profile"
+  },
+  "facebook": {
+    "page_id": "1240699955783812",
+    "page_name": "Fan Edit Fan Club"
+  },
+  "templates": {
+    "note": "Verbatim from the Zapier zaps (field pills resolved: sheet COL B = fan editor, COL C = fan edit title, COL D = original title; reddit 1. Title / 1. Link).",
+    "reddit": {
+      "discord": "New Post in The Fan Edit Fan Club Reddit Feed - ***[{title}]({url})***\n\n{url}",
+      "facebook": "New Post in The Fan Edit Fan Club Reddit Feed - \n\n{title}\n\n\n{url}",
+      "x": "New Post in The Fan Edit Fan Club Reddit Feed - \n\n{title}.\n\n{url}"
+    },
+    "sheet": {
+      "discord": "A New Row has been added to [The Fan Edit Central Database](https://faneditcentral.wixsite.com/home) - A Fan Edit of \n\n{original} called **{title} by {editor}**.",
+      "facebook": "A New Row has been added to The Fan Edit Central Database - A Fan Edit of \n\n{original} called \n{title} by \n{editor}.",
+      "x": "A New Row has been added to The Fan Edit Central Database - A Fan Edit of\n\n{original} called {title} by {editor}.\n\nhttps://faneditcentral.wixsite.com/home"
+    }
+  }
+}
