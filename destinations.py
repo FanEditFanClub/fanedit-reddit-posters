@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -69,9 +70,14 @@ def _discord_headers(token: str) -> dict:
             "User-Agent": DISCORD_UA}
 
 
+def _channel_key(n: str) -> str:
+    """Normalize a channel name for matching: strip # and leading emoji."""
+    return re.sub(r"^[^a-z0-9]+", "", n.lstrip("#").lower())
+
+
 def resolve_discord_channel_id(token: str, channel_name: str) -> str:
     """Resolve a channel id from its name, caching it in state."""
-    want = channel_name.lstrip("#").lower()
+    want = _channel_key(channel_name)
     cache = os.path.join(STATE_DIR, "discord_channels.json")
     if os.path.exists(cache):
         with open(cache) as f:
@@ -95,7 +101,7 @@ def resolve_discord_channel_id(token: str, channel_name: str) -> str:
         for c in channels if isinstance(channels, list) else []:
             name = str(c.get("name", ""))
             seen.append(f"{g.get('name', '?')}/#{name}")
-            if name.lower() == want and c.get("type") == 0:
+            if _channel_key(name) == want and c.get("type") == 0:
                 os.makedirs(STATE_DIR, exist_ok=True)
                 cached = json.load(open(cache)) if os.path.exists(cache) else {}
                 cached[want] = c["id"]
