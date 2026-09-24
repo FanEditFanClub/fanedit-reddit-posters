@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,41 +20,53 @@ import urllib.request
 from common import STATE_DIR, log
 
 DISCORD_API = "https://discord.com/api"
+# Discord's Cloudflare front door 403s Python-urllib's default UA from
+# datacenter IPs; the documented bot UA passes fine.
+DISCORD_UA = "DiscordBot (https://faneditfanclub.local, 1.0)"
 
 
 class DestinationError(RuntimeError):
     pass
 
 
+def _request(req: urllib.request.Request, label: str) -> dict | list:
+    """Open a request, retrying once on 429 honoring Retry-After."""
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read().decode("utf-8", errors="replace")
+                if r.status not in (200, 201, 204):
+                    raise DestinationError(
+                        f"{label} HTTP {r.status}: {raw[:200]}")
+                stripped = raw.strip()
+                return json.loads(stripped) if stripped else {}
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt == 1:
+                retry = e.headers.get("Retry-After")
+                wait = float(retry) + 1 if retry else 5
+                log(f"{label} rate-limited; waiting {wait:.0f}s")
+                time.sleep(wait)
+                continue
+            raise DestinationError(
+                f"{label} HTTP {e.code}: "
+                f"{e.read()[:200].decode(errors='replace')}")
+    raise DestinationError(f"{label}: retry exhausted")  # unreachable
+
+
 def _post(url: str, body: bytes, headers: dict, label: str) -> dict:
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read().decode("utf-8", errors="replace")
-            if r.status not in (200, 201, 204):
-                raise DestinationError(f"{label} HTTP {r.status}: {raw[:200]}")
-            return json.loads(raw) if raw.strip().startswith("{") else {}
-    except urllib.error.HTTPError as e:
-        raise DestinationError(
-            f"{label} HTTP {e.code}: {e.read()[:200].decode(errors='replace')}")
+    return _request(urllib.request.Request(url, data=body, headers=headers,
+                                          method="POST"), label)
 
 
 def _get(url: str, headers: dict, label: str) -> dict | list:
-    req = urllib.request.Request(url, headers=headers, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            raw = r.read().decode("utf-8", errors="replace")
-            if r.status != 200:
-                raise DestinationError(f"{label} HTTP {r.status}: {raw[:200]}")
-            return json.loads(raw) if raw.strip() else {}
-    except urllib.error.HTTPError as e:
-        raise DestinationError(
-            f"{label} HTTP {e.code}: {e.read()[:200].decode(errors='replace')}")
+    return _request(urllib.request.Request(url, headers=headers, method="GET"),
+                    label)
 
 
 def _discord_headers(token: str) -> dict:
     return {"Authorization": f"Bot {token}",
-            "Content-Type": "application/json"}
+            "Content-Type": "application/json",
+            "User-Agent": DISCORD_UA}
 
 
 def resolve_discord_channel_id(token: str, channel_name: str) -> str:
@@ -111,7 +124,7 @@ def resolve_buffer_profile_id(token: str, channel_name: str) -> str:
             pid = json.load(f).get("profile_id", "")
         if pid:
             return pid
-    data = _get("https://api.buffer.com/2/profiles.json",
+    data = _get("https://api.bufferapp.com/1/profiles.json",
                 {"Authorization": f"Bearer {token}"}, "buffer profiles")
     profiles = data.get("profiles", []) if isinstance(data, dict) else []
     twitter = [p for p in profiles
@@ -142,7 +155,7 @@ def post_buffer_x(token: str, profile_id: str, text: str) -> bool:
         "shorten": "false",
         "now": "true",
     }).encode()
-    resp = _post("https://api.buffer.com/2/updates/create.json", body, {
+    resp = _post("https://api.bufferapp.com/1/updates/create.json", body, {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/x-www-form-urlencoded",
     }, "buffer")
