@@ -1,7 +1,5 @@
 name: social-posters
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
@@ -20,13 +18,7 @@ jobs:
           python-version: "3.12"
       - name: install deps
         run: pip install -r requirements.txt
-      - name: run posters
+      - name: validate fb token
         env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          BUFFER_TOKEN: ${{ secrets.BUFFER_TOKEN }}
           FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
-          DISCORD_ERROR_CHANNEL: discord-moderators
-          GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO: ${{ github.repository }}
-          GITHUB_BRANCH: main
-        run: python run.py reddit
+        run: python validate_fb2.py; true
