@@ -25,7 +25,7 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           BUFFER_TOKEN: ${{ secrets.BUFFER_TOKEN }}
           FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
-          DISCORD_ERROR_CHANNEL: bot-logs
+          DISCORD_ERROR_CHANNEL: discord-moderators
           GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPO: ${{ github.repository }}
           GITHUB_BRANCH: main
