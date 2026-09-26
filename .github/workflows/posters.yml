@@ -1,7 +1,7 @@
 name: social-posters
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 13 * * *"  # 09:00 EDT daily (GitHub cron is UTC-only)
   workflow_dispatch:
 permissions:
   contents: write
