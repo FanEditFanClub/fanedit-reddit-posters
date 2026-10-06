@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Poll the Reddit RSS feed; post new items.
+"""Post new Reddit items from the daily browser scan; each item goes out
+24 hours after its Reddit timestamp.
 
-First run baselines (marks existing items seen, posts nothing). Retries once
-on HTTP 429; a second 429 is surfaced as an error. Crossposts/reposts are
-skipped, mirroring the old Zapier filter/code step. Returns a report dict;
-run.py aggregates and alerts.
+The 5pm ET browser scan publishes the multireddit listing to GitHub Pages
+(Reddit's public RSS died 2026-11-13). This job ticks every 15 minutes and
+releases an item once now - published >= 24h. First run baselines (marks
+existing items seen, posts nothing). Crossposts/reposts are skipped,
+mirroring the old Zapier filter/code step. Returns a report dict; run.py
+aggregates and alerts.
 """
 from __future__ import annotations
 
+import datetime
+import json
 import re
-import time
 import urllib.error
 import urllib.request
-import xml.etree.ElementTree as ET
 
 from common import load_config, load_state, save_state, log
 from destinations import (DestinationError, post_buffer_x, post_discord,
@@ -20,56 +23,36 @@ from destinations import (DestinationError, post_buffer_x, post_discord,
 
 DESTS = ("discord", "x", "facebook")
 
-# Reddit 403s non-browser user agents; a browser UA gets through.
-USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+SCAN_UA = "fanedit-reddit-posters/1.0 (by /u/faneditfanclub)"
+# Items relay 24h after their Reddit timestamp (the user's spacing rule).
+RELAY_DELAY = datetime.timedelta(hours=24)
 
 
-def _fetch_once(url: str) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read()
+def fetch_scan_items(scan_url: str) -> list:
+    """Read the daily browser-scan JSON from GitHub Pages.
 
-
-def fetch_feed(url: str) -> bytes:
-    try:
-        return _fetch_once(url)
-    except urllib.error.HTTPError as e:
-        if e.code != 429:
-            raise
-    except Exception:
-        pass  # transient network drop; fall through to the one retry
-    log("Reddit fetch failed (429 or dropped connection), retrying once after 60s...")
-    time.sleep(60)
-    return _fetch_once(url)  # a second failure surfaces as an error
-
-
-ATOM = "{http://www.w3.org/2005/Atom}"
-
-
-def parse_items(raw: bytes) -> list:
-    root = ET.fromstring(raw)
+    Returns [{id, title, link, published}] where id is the permalink URL
+    (stable, unique) and published is an aware datetime. The scan keeps a
+    ~48h lookback so a missed day self-heals.
+    """
+    req = urllib.request.Request(scan_url, headers={"User-Agent": SCAN_UA})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = json.load(r)
     items = []
-    for e in root.iter(ATOM + "entry"):  # Atom (what Reddit serves)
-        title = (e.findtext(ATOM + "title") or "").strip()
-        eid = (e.findtext(ATOM + "id") or "").strip()
-        link = ""
-        for l in e.iter(ATOM + "link"):
-            if l.get("rel", "alternate") == "alternate" and l.get("href"):
-                link = l.get("href")
-                break
-        content = e.findtext(ATOM + "content") or ""
-        if eid:
-            items.append({"id": eid, "title": title, "link": link,
-                          "description": content})
-    for it in root.iter("item"):  # RSS 2.0 fallback
-        title = (it.findtext("title") or "").strip()
-        link = (it.findtext("link") or "").strip()
-        guid = (it.findtext("guid") or link).strip()
-        desc = (it.findtext("description") or "")
-        if guid:
-            items.append({"id": guid, "title": title, "link": link,
-                          "description": desc})
+    for p in data.get("posts", []):
+        title = (p.get("title") or "").strip()
+        link = (p.get("url") or "").strip()
+        try:
+            published = datetime.datetime.fromisoformat(
+                (p.get("published") or "").strip().replace("Z", "+00:00"))
+            if published.tzinfo is None:
+                published = published.replace(
+                    tzinfo=datetime.timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        if title and link:
+            items.append({"id": link, "title": title, "link": link,
+                          "description": "", "published": published})
     return items
 
 
@@ -83,20 +66,17 @@ def is_crosspost(item: dict, patterns: list) -> bool:
 def run(cfg: dict, ctx: dict) -> dict:
     report = {"source": "reddit", "new_posts": 0, "errors": [],
               "handoffs": [], "skipped_crossposts": 0}
-    rss_url = (cfg.get("reddit") or {}).get("rss_url", "")
-    if not rss_url:
-        report["errors"].append("reddit rss_url not configured")
+    scan_url = (cfg.get("reddit") or {}).get("scan_url", "")
+    if not scan_url:
+        report["errors"].append("reddit scan_url not configured")
         return report
     try:
-        items = parse_items(fetch_feed(rss_url))
+        items = fetch_scan_items(scan_url)
     except urllib.error.HTTPError as e:
-        if e.code == 429:
-            report["errors"].append("reddit 429 persisted after retry")
-        else:
-            report["errors"].append(f"reddit fetch HTTP {e.code}")
+        report["errors"].append(f"reddit scan fetch HTTP {e.code}")
         return report
     except Exception as e:  # noqa: BLE001
-        report["errors"].append(f"reddit fetch: {e}")
+        report["errors"].append(f"reddit scan fetch: {e}")
         return report
 
     st = load_state("seen_reddit.json", {"seen_ids": [], "baselined": False})
@@ -110,7 +90,9 @@ def run(cfg: dict, ctx: dict) -> dict:
         return report
 
     patterns = cfg["reddit"].get("crosspost_patterns", [])
+    now = datetime.datetime.now(datetime.timezone.utc)
     postable = []
+    waiting = 0
     for i in items:
         if i["id"] in seen:
             continue
@@ -118,7 +100,14 @@ def run(cfg: dict, ctx: dict) -> dict:
             seen.add(i["id"])  # filtered like the old filter step: never posted
             report["skipped_crossposts"] += 1
             continue
+        # Relay 24h after the Reddit timestamp; younger items stay unseen
+        # and are reconsidered on later ticks.
+        if now - i["published"] < RELAY_DELAY:
+            waiting += 1
+            continue
         postable.append(i)
+    if waiting:
+        log(f"reddit: {waiting} item(s) seen but younger than 24h, holding.")
     if postable and not ctx.get("buffer_pid"):
         try:
             ctx["buffer_pid"] = resolve_buffer_profile_id(
