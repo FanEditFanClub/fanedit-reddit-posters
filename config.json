@@ -4,13 +4,13 @@
     "tab": "Newest Additions"
   },
   "reddit": {
-    "rss_url": "https://www.reddit.com/user/faneditfanclub/m/fan_edit_fan_club_reddit_feed/new/.rss",
     "crosspost_patterns": [
       "crosspost",
       "repost",
       "x-post",
       "crossposted from"
-    ]
+    ],
+    "scan_url": "https://faneditfanclub.github.io/fanedit-social-feeds/reddit-multireddit.json"
   },
   "discord": {
     "sheet_channel": "fan-edit-central-database",
