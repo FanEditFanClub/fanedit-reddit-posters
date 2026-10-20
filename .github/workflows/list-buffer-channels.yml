@@ -1,6 +1,10 @@
 name: list-buffer-channels
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/list-buffer-channels.yml
 permissions:
   contents: read
 jobs:
