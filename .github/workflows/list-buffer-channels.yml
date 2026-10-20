@@ -1,0 +1,60 @@
+name: list-buffer-channels
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: list buffer channels
+        env:
+          BUFFER_TOKEN: ${{ secrets.BUFFER_TOKEN }}
+        run: |
+          python3 - << 'PY'
+          import json, os, urllib.request
+          token = os.environ.get("BUFFER_TOKEN", "").strip()
+          if not token:
+              print("NO_BUFFER_TOKEN")
+              raise SystemExit(0)
+          def gql(query, variables=None):
+              body = json.dumps({"query": query, "variables": variables or {}}).encode()
+              req = urllib.request.Request(
+                  "https://api.buffer.com", data=body, method="POST",
+                  headers={"Authorization": "Bearer " + token,
+                           "Content-Type": "application/json",
+                           "User-Agent": "poster-pipeline/1.0"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read().decode())
+          data = gql("query { account { organizations { id } } }")
+          if data.get("errors"):
+              msgs = []
+              for err in data["errors"]:
+                  if isinstance(err, dict):
+                      msgs.append(str(err.get("message", ""))[:180])
+                  else:
+                      msgs.append(str(err)[:180])
+              print("GQL_ERRORS", " | ".join(msgs))
+              raise SystemExit(1)
+          orgs = ((data.get("data") or {}).get("account") or {}).get("organizations") or []
+          print("ORG_COUNT", len(orgs))
+          found = []
+          for org in orgs:
+              ch = gql(
+                  "query($orgId: OrganizationId!) { channels(input: "
+                  "{organizationId: $orgId}) { id name service } }",
+                  {"orgId": org["id"]})
+              if ch.get("errors"):
+                  print("CHANNEL_ERRORS", json.dumps(ch["errors"])[:300])
+                  continue
+              for c in (ch.get("data") or {}).get("channels") or []:
+                  found.append({
+                      "id": c.get("id"),
+                      "name": c.get("name"),
+                      "service": c.get("service"),
+                  })
+          print("CHANNELS", json.dumps(found))
+          threads = [c for c in found if str(c.get("service", "")).lower() == "threads"]
+          print("THREADS_COUNT", len(threads))
+          print("THREADS", json.dumps(threads))
+          PY
