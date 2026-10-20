@@ -18,10 +18,12 @@ import urllib.error
 import urllib.request
 
 from common import load_config, load_state, save_state, log
-from destinations import (DestinationError, post_buffer_x, post_discord,
-                          post_facebook_page, resolve_buffer_profile_id)
+from destinations import (DestinationError, post_buffer_threads, post_buffer_x,
+                          post_discord, post_facebook_page,
+                          resolve_buffer_profile_id,
+                          resolve_buffer_threads_profile_id)
 
-DESTS = ("discord", "x", "facebook")
+DESTS = ("discord", "x", "facebook", "threads")
 
 SCAN_UA = "fanedit-reddit-posters/1.0 (by /u/faneditfanclub)"
 # Items relay 24h after their Reddit timestamp (the user's spacing rule).
@@ -114,11 +116,22 @@ def run(cfg: dict, ctx: dict) -> dict:
                 ctx["buffer_token"], cfg["buffer"]["channel_name"])
         except DestinationError as e:
             report["errors"].append(f"buffer profile resolve: {e}")
+    if postable and not ctx.get("buffer_threads_pid"):
+        try:
+            ctx["buffer_threads_pid"] = resolve_buffer_threads_profile_id(
+                ctx["buffer_token"],
+                cfg["buffer"].get("threads_channel_name", ""))
+        except DestinationError as e:
+            report["errors"].append(f"buffer threads profile resolve: {e}")
 
     for i in postable:
         tpl = cfg["templates"]["reddit"]
+        # Threads uses the X template verbatim. Long copies are chained
+        # inside post_buffer_threads so each part stays within 500 chars.
+        x_text = tpl["x"].format(title=i["title"], url=i["link"])
         texts = {d: tpl[d].format(title=i["title"], url=i["link"])
-                 for d in DESTS}
+                 for d in DESTS if d != "threads"}
+        texts["threads"] = x_text
         results: dict = {}
         for d in DESTS:
             try:
@@ -128,6 +141,9 @@ def run(cfg: dict, ctx: dict) -> dict:
                 elif d == "x":
                     post_buffer_x(ctx["buffer_token"],
                                   ctx["buffer_pid"], texts[d])
+                elif d == "threads":
+                    post_buffer_threads(ctx["buffer_token"],
+                                        ctx["buffer_threads_pid"], texts[d])
                 else:
                     post_facebook_page(ctx["fb_token"], ctx["fb_page_id"],
                                        texts[d], link=i["link"])
