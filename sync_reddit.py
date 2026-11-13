@@ -80,6 +80,37 @@ def is_crosspost(item: dict, patterns: list) -> bool:
     return any(p in text for p in patterns)
 
 
+# A genuine Reddit post URL: https://www.reddit.com/r/<sub>/comments/<id>/<slug>/
+_REDDIT_POST_URL = re.compile(
+    r"^https://(?:www\.|old\.)?reddit\.com/r/[^/]+/comments/([a-z0-9]+)/",
+    re.IGNORECASE)
+
+
+def valid_reddit_link(item: dict) -> str:
+    """Validate an RSS item's link before it is posted anywhere.
+
+    Returns "" when the link is a genuine Reddit post URL whose post id
+    matches the feed entry's own id; otherwise returns a short reason.
+    A mismatched link means the post would point at a different Reddit
+    post (the Nov 12 incident: previews/links showed unrelated posts,
+    including porn). A bad link is never posted — it is skipped and
+    surfaced as an error instead.
+    """
+    link = (item.get("link") or "").strip()
+    m = _REDDIT_POST_URL.match(link)
+    if not m:
+        return f"link is not a Reddit post URL: {link[:120]}"
+    post_id = m.group(1).lower()
+    eid = (item.get("id") or "").strip().lower()
+    # Atom ids look like "t3_<post_id>"; RSS guids are often the URL itself.
+    # Either way the link's post id must be the entry's own post id.
+    eid_post = eid[3:] if eid.startswith("t3_") else eid
+    if post_id != eid_post and post_id not in eid and eid_post not in link.lower():
+        return (f"link post id {post_id} does not match entry id "
+                f"{item.get('id')}: {link[:120]}")
+    return ""
+
+
 def run(cfg: dict, ctx: dict) -> dict:
     report = {"source": "reddit", "new_posts": 0, "errors": [],
               "handoffs": [], "skipped_crossposts": 0}
@@ -117,6 +148,14 @@ def run(cfg: dict, ctx: dict) -> dict:
         if is_crosspost(i, patterns):
             seen.add(i["id"])  # filtered like the old filter step: never posted
             report["skipped_crossposts"] += 1
+            continue
+        bad_link = valid_reddit_link(i)
+        if bad_link:
+            # Wrong link = never post it. Mark seen so it is not retried,
+            # and surface it as an error so a human sees it.
+            seen.add(i["id"])
+            report["errors"].append(
+                f"SKIPPED bad reddit link for '{i['title'][:80]}': {bad_link}")
             continue
         postable.append(i)
     if postable and not ctx.get("buffer_pid"):
