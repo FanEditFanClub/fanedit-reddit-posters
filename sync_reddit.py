@@ -86,13 +86,24 @@ _REDDIT_POST_URL = re.compile(
     re.IGNORECASE)
 
 
+def _slugify_title(title: str) -> str:
+    """Reddit's URL slug for a post title: lowercase, spaces become
+    underscores, all other non-alphanumeric characters are REMOVED
+    (not replaced) — e.g. 'Halloween Noir (2018-2022)' becomes
+    'halloween_noir_20182022', not 'halloween_noir_2018_2022'."""
+    s = title.lower().replace(" ", "_")
+    s = re.sub(r"[^a-z0-9_]+", "", s)
+    return re.sub(r"_+", "_", s).strip("_")
+
+
 def valid_reddit_link(item: dict) -> str:
     """Validate an RSS item's link before it is posted anywhere.
 
     Returns "" when the link is a genuine Reddit post URL whose post id
-    matches the feed entry's own id; otherwise returns a short reason.
-    A mismatched link means the post would point at a different Reddit
-    post (the Nov 12 incident: previews/links showed unrelated posts,
+    matches the feed entry's own id AND whose URL slug matches the entry's
+    title; otherwise returns a short reason. A mismatched link means the
+    post would point at a different Reddit post (the Nov 12 incident:
+    titles were fan-edit posts but links pointed at unrelated posts,
     including porn). A bad link is never posted — it is skipped and
     surfaced as an error instead.
     """
@@ -108,6 +119,17 @@ def valid_reddit_link(item: dict) -> str:
     if post_id != eid_post and post_id not in eid and eid_post not in link.lower():
         return (f"link post id {post_id} does not match entry id "
                 f"{item.get('id')}: {link[:120]}")
+    # The URL slug must match the title: Reddit builds the slug from the
+    # title, so a link whose slug is unrelated to the title is the wrong
+    # post even if the id somehow matched.
+    slug = link.rstrip("/").rsplit("/", 1)[-1].lower()
+    want = _slugify_title(item.get("title") or "")
+    if want and slug:
+        # Reddit truncates long slugs; accept when either is a prefix of
+        # the other (covers truncation from either side).
+        if not (slug.startswith(want[:20]) or want.startswith(slug[:20])):
+            return (f"link slug '{slug}' does not match title "
+                    f"'{item.get('title', '')[:80]}': {link[:120]}")
     return ""
 
 
@@ -179,14 +201,13 @@ def run(cfg: dict, ctx: dict) -> dict:
                     post_buffer_x(ctx["buffer_token"],
                                   ctx["buffer_pid"], texts[d])
                 else:
-                    # Facebook: text-only post. Do NOT pass link= — Facebook
-                    # scrapes the link for an Open Graph preview, and
-                    # Reddit serves wrong/generic OG data to Facebook's
-                    # crawler (previews showed unrelated posts: r/Huawei,
-                    # r/lawofassumption, r/Vertical_Dramas). The URL stays
-                    # in the message text as a clickable link.
+                    # Facebook: link post WITH the preview. The link is
+                    # validated by valid_reddit_link() before posting, so
+                    # the preview now matches the post text. (Nov 12: the
+                    # preview showed unrelated posts because the link did
+                    # not match the title; that is now caught and skipped.)
                     post_facebook_page(ctx["fb_token"], ctx["fb_page_id"],
-                                       texts[d])
+                                       texts[d], link=i["link"])
                 results[d] = True
             except Exception as e:  # noqa: BLE001
                 results[d] = f"ERROR: {e}"
